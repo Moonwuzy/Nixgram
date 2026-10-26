@@ -20,8 +20,8 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           meta = {
-            description = "An interactive package manager for NixOS flakes";
-            mainProgram = "nixgram";
+            description = "An easier package manager for nix";
+            mainProgram = "nxg";
             platforms = pkgs.lib.platforms.linux;
           };
         };
