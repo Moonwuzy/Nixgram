@@ -15,7 +15,7 @@ const MAX_SEARCH_RESULTS: usize = 10;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "nixgram",
+    name = "nxg",
     version,
     about = "An interactive package manager for NixOS flakes"
 )]
@@ -34,6 +34,9 @@ struct Cli {
 
     #[arg(short = 'c')]
     clean: bool,
+
+    #[arg(long = "list")]
+    list: bool,
 
     #[arg(long = "settings")]
     settings: bool,
@@ -331,6 +334,7 @@ fn select_target() -> Result<PackageTarget> {
 // Locate a package list while ignoring ordinary quoted strings and Nix comments.
 fn find_list_bounds(source: &str, marker: &str) -> Result<(usize, usize)> {
     let mut marker_matches = source.match_indices(marker);
+
     let (marker_start, _) = marker_matches
         .next()
         .with_context(|| format!("Could not find `{marker}` in the package module"))?;
@@ -470,7 +474,7 @@ fn install_package(query: &str) -> Result<()> {
     let module = settings
         .module
         .as_deref()
-        .context("No package module selected. Run `nixgram -settings` first.")?;
+        .context("No package module selected. Run `nxg -settings` first.")?;
 
     let module_path = Path::new(module);
 
@@ -529,7 +533,6 @@ fn install_package(query: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Insert on its own line, before the closing bracket's indentation.
     let line_start = original[..list_end]
         .rfind('\n')
         .map(|index| index + 1)
@@ -552,7 +555,7 @@ fn uninstall_package(query: &str) -> Result<()> {
     let module = settings
         .module
         .as_deref()
-        .context("No package module selected. Run `nixgram -settings` first.")?;
+        .context("No package module selected. Run `nxg -settings` first.")?;
 
     let module_path = Path::new(module);
 
@@ -561,6 +564,7 @@ fn uninstall_package(query: &str) -> Result<()> {
     }
 
     let target = select_target()?;
+
     let original = fs::read_to_string(module_path)
         .with_context(|| format!("Could not read {}", module_path.display()))?;
 
@@ -638,13 +642,72 @@ fn uninstall_package(query: &str) -> Result<()> {
     Ok(())
 }
 
+// List declarations in the configured System and Home Manager package lists.
+fn list_installed_packages() -> Result<()> {
+    let settings = load_settings();
+
+    let module = settings
+        .module
+        .as_deref()
+        .context("No package module selected. Run `nxg -settings` first.")?;
+
+    let module_path = Path::new(module);
+
+    if !module_path.is_file() {
+        bail!("Package module does not exist: {module}");
+    }
+
+    let source = fs::read_to_string(module_path)
+        .with_context(|| format!("Could not read {}", module_path.display()))?;
+
+    println!("Nixgram package lists\n");
+    println!("Source: {}\n", module_path.display());
+
+    for target in [PackageTarget::System, PackageTarget::HomeManager] {
+        println!("{}:", target.label());
+
+        match find_list_bounds(&source, target.marker()) {
+            Ok((start, end)) => {
+                let packages: Vec<String> = source[start..end]
+                    .lines()
+                    .filter_map(|line| {
+                        let entry = line.split('#').next().unwrap_or("").trim();
+
+                        if entry.is_empty() {
+                            None
+                        } else {
+                            Some(entry.to_string())
+                        }
+                    })
+                    .collect();
+
+                if packages.is_empty() {
+                    println!("  No packages listed.");
+                } else {
+                    for (index, package) in packages.iter().enumerate() {
+                        println!("  {}. {}", index + 1, package);
+                    }
+                    println!("  Total: {}", packages.len());
+                }
+            }
+            Err(_) => {
+                println!("  Package list not found in the configured module.");
+            }
+        }
+
+        println!();
+    }
+
+    Ok(())
+}
+
 fn update_flake() -> Result<()> {
     let settings = load_settings();
 
     let flake = settings
         .flake
         .as_deref()
-        .context("No flake selected. Run `nixgram -settings` first.")?;
+        .context("No flake selected. Run `nxg -settings` first.")?;
 
     let root = Path::new(flake).parent().context("Invalid flake path")?;
 
@@ -703,6 +766,7 @@ fn print_help() {
          -u PACKAGE  Remove a package declaration\n\
          -fu         Update flake inputs\n\
          -c          Clean unused Nix store paths\n\
+         -list       List System and Home Manager packages\n\
          -settings   Select flake and package module"
     );
 }
@@ -712,6 +776,7 @@ fn main() -> Result<()> {
         .map(|arg| match arg.as_str() {
             "-settings" => "--settings".to_string(),
             "-fu" => "--flake-update".to_string(),
+            "-list" => "--list".to_string(),
             other => other.to_string(),
         })
         .collect();
@@ -722,6 +787,8 @@ fn main() -> Result<()> {
         configure()?;
     } else if let Some(query) = cli.search {
         search_packages(&query)?;
+    } else if cli.list {
+        list_installed_packages()?;
     } else if let Some(package) = cli.install {
         install_package(&package)?;
     } else if let Some(package) = cli.uninstall {
